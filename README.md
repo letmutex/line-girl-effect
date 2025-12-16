@@ -1,10 +1,14 @@
 # Line Girl Effect
 
-![Figure 1](./figure.png)
+<img width="512" src="./figure.png" alt="Figure 1"/>
 
 A Python implementation of the Line Girl effect (a variant of the Joy Division effect?). Inspired by this [Tweet](https://x.com/Moodsby_v/status/2000586572912042309) and this [Post](https://www.tumblr.com/low-sugar-eye-candy/169354251468/line-girl).
 
 *Coded by Gemini 3 Pro and tweaked by me.*
+
+**Video**
+
+https://github.com/user-attachments/assets/ed92cf1b-3b78-4fbc-bd3d-0f1e981e4e33
 
 # Run
 
