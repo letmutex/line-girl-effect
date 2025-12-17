@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import colorchooser, filedialog
 
+import matplotlib
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,13 +9,11 @@ from matplotlib.widgets import Button
 from PIL import Image
 from scipy.ndimage import gaussian_filter1d
 
-# Initialize global Tk instance to prevent crashes
-# We keep it hidden since we only need it for dialogs
+from controls import ControlPanelMSG
+
 root = tk.Tk()
 root.withdraw()
 
-# ==========================================
-#           Parameter Configuration
 # ==========================================
 
 # --- Canvas Basic Settings ---
@@ -23,40 +22,38 @@ CANVAS_SIZE = 512
 INITIAL_BG_COLOR = "#3A4F68"
 INITIAL_DOT_COLOR = "#e1ebf5"
 
-# --- Core Animation Physics Parameters (keep values unchanged) ---
+# Smoother animation, but may cause some rendering issues
+USE_BLIT = False
 
-LINES_PER_FRAME = 1
-# Meaning: Number of lines generated per frame.
-# Increase: Lines become denser, gaps shrink, overall brighter, like a solid body.
-# Decrease: Lines become sparser, stronger scanline effect, darker overall.
-
-FRAME_INTERVAL = 15
-# Meaning: Time interval (in frames) for generating new lines.
-# Increase: New lines generate slowly, horizontal spacing increases, stretched appearance.
-# Decrease: New lines generate quickly, horizontal spacing decreases, compressed appearance.
-
-BASE_SPEED = 3.0
-# Meaning: Base particle movement speed on pure black background.
-# Increase: Stronger flow sensation, but may cause line breaks.
-# Decrease: Slower flow, more coherent appearance.
-
-FRICTION_FACTOR = 0.9
-# Meaning: Degree of brightness-based speed impedance (0.0 - 1.0).
-# Increase (closer to 1.0): Bright area particles almost stop, forming extreme 3D relief (peaks).
-# Decrease: Bright area particles decelerate less obviously, flatter appearance.
-
-ACCELERATION = 0.0001
-# Meaning: Acceleration in X-axis direction.
-# Increase: Lines accelerate during movement, creating stretching effect.
-# Decrease: Uniform motion.
-
-LINE_TENSION = 0.3
-# Meaning: Line smoothness (Gaussian blur Sigma value).
-# Increase: Very smooth lines, loss of detail, liquid-like appearance.
-# Decrease: Lines retain more noise and jaggedness, sharper.
-
-# --- Image Processing Parameters (Adjustable) ---
-PROCESS_PARAMS = {
+# --- Global Parameters Dictionary ---
+# Replaced individual constants with a mutable dictionary to support UI sliders
+PARAMS = {
+    # --- Generation Params ---
+    "LINES_PER_FRAME": 1,
+    # Meaning: Number of lines generated per frame.
+    # Increase: Lines become denser, gaps shrink, overall brighter, like a solid body.
+    # Decrease: Lines become sparser, stronger scanline effect, darker overall.
+    "FRAME_INTERVAL": 15,
+    # Meaning: Time interval (in frames) for generating new lines.
+    # Increase: New lines generate slowly, horizontal spacing increases, stretched appearance.
+    # Decrease: New lines generate quickly, horizontal spacing decreases, compressed appearance.
+    "BASE_SPEED": 3.0,
+    # Meaning: Base particle movement speed on pure black background.
+    # Increase: Stronger flow sensation, but may cause line breaks.
+    # Decrease: Slower flow, more coherent appearance.
+    "FRICTION_FACTOR": 0.9,
+    # Meaning: Degree of brightness-based speed impedance (0.0 - 1.0).
+    # Increase (closer to 1.0): Bright area particles almost stop, forming extreme 3D relief (peaks).
+    # Decrease: Bright area particles decelerate less obviously, flatter appearance.
+    "ACCELERATION": 0.0001,
+    # Meaning: Acceleration in X-axis direction.
+    # Increase: Lines accelerate during movement, creating stretching effect.
+    # Decrease: Uniform motion.
+    "LINE_TENSION": 0.3,
+    # Meaning: Line smoothness (Gaussian blur Sigma value).
+    # Increase: Very smooth lines, loss of detail, liquid-like appearance.
+    # Decrease: Lines retain more noise and jaggedness, sharper.
+    # --- Image Processing Params ---
     "contrast_steepness": 9,
     "contrast_midpoint": 0.3,
     "blur_sigma": 2.0,
@@ -132,15 +129,15 @@ def apply_image_effects(data):
     """
     # S-curve: Nonlinear contrast adjustment
     # Purpose is to darken background noise while enhancing midtone layers (clothing/facial features)
-    steepness = PROCESS_PARAMS["contrast_steepness"]
-    midpoint = PROCESS_PARAMS["contrast_midpoint"]
+    steepness = PARAMS["contrast_steepness"]
+    midpoint = PARAMS["contrast_midpoint"]
     data = 1 / (1 + np.exp(-(data - midpoint) * steepness))
 
     # Re-normalize to 0-1
     data = (data - data.min()) / (data.max() - data.min())
 
     # 3. Preprocessing blur
-    sigma = PROCESS_PARAMS["blur_sigma"]
+    sigma = PARAMS["blur_sigma"]
     data = gaussian_filter1d(data, sigma=sigma, axis=0)
     data = gaussian_filter1d(data, sigma=sigma, axis=1)
 
@@ -155,7 +152,9 @@ pixels = apply_image_effects(raw_normalized_data)
 #          UI and Drawing Logic
 # ==========================================
 
-fig, ax = plt.subplots(figsize=(9, 9), dpi=100)
+with matplotlib.rc_context({"toolbar": "None"}):
+    fig, ax = plt.subplots(figsize=(9, 9), dpi=100)
+
 # Leave more space at bottom for buttons
 plt.subplots_adjust(bottom=0.15, left=0.05, right=0.95, top=0.95)
 
@@ -180,7 +179,10 @@ img_obj = ax.imshow(
 )
 
 # Particle object
-scat = ax.scatter([], [], s=0.2, c=current_dot_color, alpha=0.9, marker="o")
+# Enable clipping to ensure points don't bleed out (important for blit)
+scat = ax.scatter(
+    [], [], s=0.2, c=current_dot_color, alpha=0.9, marker="o", clip_on=True
+)
 
 # Global variables
 particles_x = []
@@ -205,8 +207,7 @@ def select_image(event):
     """Select image file"""
     global pixels, particles_x, frame_count, current_image_path, raw_normalized_data
 
-    # Remove local root creation/destruction
-    # We still rely on the hidden global root for these dialogs
+    # Use the global hidden root for dialogs
     file_path = filedialog.askopenfilename(
         title="Select Image",
         filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.webp")],
@@ -227,8 +228,8 @@ def select_image(event):
 
 def set_bg_color(event):
     """Set background color"""
-    global current_bg_color
-    # Remove local root creation/destruction
+    global current_bg_color, ani
+
     color = colorchooser.askcolor(
         title="Select Background Color", initialcolor=current_bg_color
     )[1]
@@ -237,13 +238,33 @@ def set_bg_color(event):
         current_bg_color = color
         ax.set_facecolor(current_bg_color)
         fig.patch.set_facecolor(current_bg_color)
-        plt.draw()
+
+        # Completely re-create the animation object.
+        # This is the most reliable way to reset the blit background buffer
+        # without diving into private attributes like _blit_cache.
+        if ani:
+            ani.event_source.stop()
+
+        plt.draw()  # Apply new background color to canvas
+
+        # Re-initialize animation with new background
+        ani = animation.FuncAnimation(
+            fig,
+            animate,
+            frames=None,
+            interval=20,
+            blit=USE_BLIT,
+            cache_frame_data=False,
+        )
 
 
 def set_dot_color(event):
     """Set particle color"""
     global current_dot_color
-    # Remove local root creation/destruction
+
+    # Use global root
+    from tkinter import colorchooser
+
     color = colorchooser.askcolor(
         title="Select Particle Color", initialcolor=current_dot_color
     )[1]
@@ -331,10 +352,23 @@ def animate(frame):
 
     frame_count += 1
 
+    # Read params once per frame to avoid dict lookup overhead in loops
+    # This also helps with consistency within a single frame
+    p_lines_per_frame = PARAMS["LINES_PER_FRAME"]
+    p_frame_interval = PARAMS["FRAME_INTERVAL"]
+    p_base_speed = PARAMS["BASE_SPEED"]
+    p_friction = PARAMS["FRICTION_FACTOR"]
+    p_acceleration = PARAMS["ACCELERATION"]
+    p_line_tension = PARAMS["LINE_TENSION"]
+
     # Generate new lines
-    if is_generating and frame_count % FRAME_INTERVAL == 0:
-        new_column = np.zeros(CANVAS_SIZE)
-        particles_x.append(new_column)
+    if is_generating and frame_count % p_frame_interval == 0:
+        lines_to_gen = p_lines_per_frame
+        # If > 1 line per frame, we might want to offset them or just add multiple identical columns
+        # Original code added 1 column. With multiline, we append multiple times.
+        for _ in range(lines_to_gen):
+            new_column = np.zeros(CANVAS_SIZE)
+            particles_x.append(new_column)
 
     active_particles = []
     y_indices = np.arange(CANVAS_SIZE)
@@ -346,15 +380,15 @@ def animate(frame):
         norm_b = brightness / 255.0
 
         # Calculate speed
-        current_speed = BASE_SPEED * (1.0 - (norm_b * FRICTION_FACTOR))
-        x_accel = col_x * ACCELERATION
+        current_speed = p_base_speed * (1.0 - (norm_b * p_friction))
+        x_accel = col_x * p_acceleration
         final_speed = current_speed + x_accel
 
         # Move
         col_x += final_speed
 
         # Smooth
-        col_x[:] = gaussian_filter1d(col_x, sigma=LINE_TENSION)
+        col_x[:] = gaussian_filter1d(col_x, sigma=p_line_tension)
 
         # Keep points within canvas
         if np.min(col_x) < CANVAS_SIZE:
@@ -366,7 +400,16 @@ def animate(frame):
     if particles_x:
         all_x = np.array(particles_x).flatten()
         all_y = np.tile(y_indices, len(particles_x))
-        mask = all_x < CANVAS_SIZE
+
+        # Add a small margin to prevent edge artifacts when blitting
+        # Points exactly on the edge might not be cleared properly by the background restore
+        margin = 2
+        mask = (
+            (all_x < CANVAS_SIZE - margin)
+            & (all_y > margin)
+            & (all_y < CANVAS_SIZE - margin)
+        )
+
         if np.any(mask):
             data = np.stack([all_x[mask], all_y[mask]], axis=1)
             scat.set_offsets(data)
@@ -378,7 +421,23 @@ def animate(frame):
     return [scat, img_obj]
 
 
+# --- Initialize Control Panel ---
+
+
+def on_process_change():
+    """Callback for when processing parameters change"""
+    global pixels
+    if raw_normalized_data is not None:
+        pixels = apply_image_effects(raw_normalized_data)
+        img_obj.set_data(pixels)
+        fig.canvas.draw_idle()
+
+
+# Use Matplotlib-based control panel
+ctrl_panel = ControlPanelMSG(PARAMS, on_process_change, toggle_generation)
+
+
 ani = animation.FuncAnimation(
-    fig, animate, frames=None, interval=20, blit=False, cache_frame_data=False
+    fig, animate, frames=None, interval=20, blit=USE_BLIT, cache_frame_data=False
 )
 plt.show()
